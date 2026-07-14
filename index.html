@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Collage Maker</title>
+  <link rel="stylesheet" href="./css/style.css" />
+</head>
+<body>
+  <header class="toolbar">
+    <div class="group">
+      <label>
+        Paper
+        <select id="paperSize"></select>
+      </label>
+      <label>
+        Orientation
+        <select id="orientation">
+          <option value="portrait">Portrait</option>
+          <option value="landscape">Landscape</option>
+        </select>
+      </label>
+      <label>
+        DPI
+        <select id="dpi">
+          <option value="150">150</option>
+          <option value="300">300</option>
+          <option value="600" selected>600</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="group">
+      <button id="addImages" type="button">Add images…</button>
+      <input id="fileInput" type="file" accept="image/*" multiple hidden />
+    </div>
+
+    <div class="group" id="itemControls" aria-label="Selected image controls">
+      <button id="cropBtn" type="button" disabled>Crop</button>
+      <button id="uncropBtn" type="button" disabled>Uncrop</button>
+      <button id="toFront" type="button" disabled title="Bring to front">⤒</button>
+      <button id="forward" type="button" disabled title="Bring forward">↑</button>
+      <button id="backward" type="button" disabled title="Send backward">↓</button>
+      <button id="toBack" type="button" disabled title="Send to back">⤓</button>
+      <button id="deleteBtn" type="button" disabled title="Delete (Del)">🗑</button>
+    </div>
+
+    <div class="group crop-actions" id="cropActions" hidden>
+      <span class="crop-hint">Adjust the crop rectangle</span>
+      <button id="cropApply" type="button">Apply crop</button>
+      <button id="cropCancel" type="button">Cancel</button>
+    </div>
+
+    <div class="group push-right">
+      <button id="exportBtn" type="button">Export PNG</button>
+    </div>
+  </header>
+
+  <main class="stage" id="stage">
+    <div class="paper" id="paper" tabindex="0">
+      <p class="empty-hint" id="emptyHint">Add images to start your collage</p>
+    </div>
+  </main>
+
+  <div class="statusbar" id="statusbar"></div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

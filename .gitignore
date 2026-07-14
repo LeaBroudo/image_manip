@@ -1,0 +1,8 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+
+# Nothing to build — this is plain static HTML/CSS/JS.
+node_modules/
