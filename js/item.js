@@ -7,9 +7,15 @@ import { startMove, startScale, startRotate } from './transform.js';
 let paperEl = null;
 const elements = new Map(); // id -> { wrapper, img }
 let selectionEl = null;
+let maskEl = null;
 
 export function initItemLayer(el) {
   paperEl = el;
+  // Shades any image area outside the paper (won't appear in the export).
+  maskEl = document.createElement('div');
+  maskEl.className = 'overflow-mask';
+  paperEl.appendChild(maskEl);
+
   selectionEl = buildSelectionOverlay();
   paperEl.appendChild(selectionEl);
 }
@@ -103,6 +109,10 @@ export function render() {
     refs.wrapper.style.zIndex = String(index + 1);
     refs.wrapper.classList.toggle('selected', item.id === state.selectedId);
   });
+
+  // Mask sits above all images (to shade their outside-paper parts) but below
+  // the selection handles.
+  if (maskEl) maskEl.style.zIndex = String(state.items.length + 5);
 
   updateSelectionOverlay();
 }

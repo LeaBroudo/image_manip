@@ -108,14 +108,22 @@ subscribe(() => {
 });
 
 // ---------- Image loading ----------
-function loadFiles(fileList) {
+// placeAt (optional): { cx, cy } in paper-width units to drop images at; when
+// omitted, addItem centers them. Multiple files are staggered slightly.
+function loadFiles(fileList, placeAt) {
   const files = Array.from(fileList).filter((f) => f.type.startsWith('image/'));
-  for (const file of files) {
+  files.forEach((file, i) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
       const aspect = img.naturalWidth / img.naturalHeight;
-      addItem(img, url, aspect);
+      const item = addItem(img, url, aspect);
+      if (placeAt) {
+        const offset = i * 0.03;
+        item.cx = placeAt.cx + offset;
+        item.cy = placeAt.cy + offset;
+        render();
+      }
       status(`Added ${file.name} (${img.naturalWidth}×${img.naturalHeight})`);
     };
     img.onerror = () => {
@@ -123,7 +131,17 @@ function loadFiles(fileList) {
       status(`Could not load ${file.name}`);
     };
     img.src = url;
+  });
+}
+
+// Where on the paper a drop landed, in paper-width units — or null if the drop
+// was not over the paper (then images are centered).
+function dropPointOnPaper(e) {
+  const r = paperEl.getBoundingClientRect();
+  if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) {
+    return null;
   }
+  return { cx: (e.clientX - r.left) / r.width, cy: (e.clientY - r.top) / r.width };
 }
 
 // ---------- Wiring ----------
@@ -223,6 +241,35 @@ function wire() {
       const [dx, dy] = map[e.key];
       nudgeSelected(dx, dy);
     }
+  });
+
+  // Drag & drop image files anywhere on the page (works with existing photos).
+  let dragDepth = 0;
+  window.addEventListener('dragenter', (e) => {
+    if (![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    dragDepth++;
+    document.body.classList.add('dragging');
+  });
+  window.addEventListener('dragover', (e) => {
+    if (![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  window.addEventListener('dragleave', () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) document.body.classList.remove('dragging');
+  });
+  window.addEventListener('drop', (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    dragDepth = 0;
+    document.body.classList.remove('dragging');
+    if (isCropping()) {
+      status('Finish or cancel cropping before adding images.');
+      return;
+    }
+    loadFiles(e.dataTransfer.files, dropPointOnPaper(e));
   });
 
   window.addEventListener('resize', () => {

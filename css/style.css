@@ -95,6 +95,22 @@ body {
   /* width/height set in JS from the selected paper size */
 }
 
+/* Shades everything outside the paper so image parts that hang past the edge
+   (and won't be exported) appear dimmed. The element itself covers the paper
+   but is transparent; its large spread box-shadow fills the surrounding area. */
+.overflow-mask {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: 0 0 0 5000px rgba(28, 31, 36, 0.62);
+}
+
+/* Drop-target cue when dragging image files over the page. */
+body.dragging .paper {
+  outline: 3px dashed var(--accent);
+  outline-offset: 6px;
+}
+
 .empty-hint {
   position: absolute;
   inset: 0;

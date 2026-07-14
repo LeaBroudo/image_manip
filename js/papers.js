@@ -11,7 +11,7 @@ export const PAPER_SIZES = [
   { id: 'legal', label: 'US Legal (8.5 × 14 in)', w: 215.9, h: 355.6 },
 ];
 
-export const DEFAULT_PAPER_ID = 'a4';
+export const DEFAULT_PAPER_ID = 'letter';
 export const DEFAULT_DPI = 600;
 
 export function getPaper(id) {
