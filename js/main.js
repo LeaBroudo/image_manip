@@ -1,10 +1,14 @@
-// Bootstrap: builds the paper stage, wires the toolbar, loads images, handles
-// keyboard shortcuts, and installs the reload guard.
+// Bootstrap: builds the collage panels, wires the toolbar, loads images, handles
+// keyboard shortcuts and drag-and-drop, and installs the reload guard.
 
 import {
   state,
   subscribe,
   setConfig,
+  addCollage,
+  removeCollage,
+  getCollage,
+  setActiveCollage,
   addItem,
   removeItem,
   getSelected,
@@ -15,16 +19,16 @@ import {
   backward,
 } from './state.js';
 import { PAPER_SIZES, DEFAULT_PAPER_ID, aspectRatio } from './papers.js';
-import { initItemLayer, render } from './item.js';
+import { CollageView, setPaperDisplaySize } from './collageView.js';
+import { setView, getView, deleteView } from './views.js';
 import { nudgeSelected } from './transform.js';
 import { enterCrop, cancelCrop, applyCrop, resetCrop, isCropping } from './crop.js';
-import { exportPng } from './exporter.js';
+import { exportCollage, exportAll } from './exporter.js';
 
 const $ = (id) => document.getElementById(id);
 
-const paperEl = $('paper');
 const stageEl = $('stage');
-const emptyHint = $('emptyHint');
+const collagesEl = $('collages');
 const statusbar = $('statusbar');
 
 const els = {
@@ -33,6 +37,7 @@ const els = {
   dpi: $('dpi'),
   addImages: $('addImages'),
   fileInput: $('fileInput'),
+  addCollage: $('addCollage'),
   cropBtn: $('cropBtn'),
   uncropBtn: $('uncropBtn'),
   toFront: $('toFront'),
@@ -44,8 +49,33 @@ const els = {
   cropActions: $('cropActions'),
   cropApply: $('cropApply'),
   cropCancel: $('cropCancel'),
-  exportBtn: $('exportBtn'),
+  exportAllBtn: $('exportAllBtn'),
 };
+
+// Callbacks handed to every CollageView.
+const viewHandlers = {
+  onExport: (collageId) => {
+    const collage = getCollage(collageId);
+    if (!collage) return;
+    const { outW, outH, filename } = exportCollage(collage);
+    status(`Exporting ${filename} at ${outW}×${outH}px…`);
+  },
+  onDelete: (collageId) => {
+    if (state.collages.length <= 1) {
+      status('Keep at least one collage.');
+      return;
+    }
+    if (window.confirm('Delete this collage? This cannot be undone.')) {
+      removeCollage(collageId);
+      status('Collage deleted.');
+    }
+  },
+  onActivate: (collageId) => setActiveCollage(collageId),
+};
+
+function status(msg) {
+  statusbar.textContent = msg;
+}
 
 // ---------- Paper sizing ----------
 function populatePaperSizes() {
@@ -58,27 +88,63 @@ function populatePaperSizes() {
   els.paperSize.value = DEFAULT_PAPER_ID;
 }
 
-function resizePaper() {
+function computeDisplaySize() {
   const aspect = aspectRatio(state.config.paperId, state.config.orientation);
-  const availW = stageEl.clientWidth - 48;
-  const availH = stageEl.clientHeight - 48;
-  let w = availW;
-  let h = w / aspect;
-  if (h > availH) {
-    h = availH;
-    w = h * aspect;
+  const stageW = Math.max(240, stageEl.clientWidth - 48);
+  let h = Math.min(0.72 * window.innerHeight, 820);
+  let w = h * aspect;
+  // Let ~2 papers sit per row once there is more than one.
+  const maxW = stageW * (state.collages.length <= 1 ? 0.62 : 0.46);
+  if (w > maxW) {
+    w = maxW;
+    h = w / aspect;
   }
-  paperEl.style.width = `${Math.floor(w)}px`;
-  paperEl.style.height = `${Math.floor(h)}px`;
+  setPaperDisplaySize(Math.round(w), Math.round(h));
 }
 
-// ---------- Toolbar state ----------
+// ---------- Reconcile views with state.collages ----------
+function reconcileViews() {
+  const wanted = new Set(state.collages.map((c) => c.id));
+  // Remove views for deleted collages.
+  for (const c of [...document.querySelectorAll('.collage-panel')]) {
+    const id = Number(c.dataset.collageId);
+    if (!wanted.has(id)) {
+      const v = getView(id);
+      if (v) v.destroy();
+      deleteView(id);
+    }
+  }
+  // Create + (re)append in state order.
+  for (const collage of state.collages) {
+    let view = getView(collage.id);
+    if (!view) {
+      view = new CollageView(collage, viewHandlers);
+      setView(collage.id, view);
+    }
+    collagesEl.appendChild(view.panel); // keeps DOM order aligned to state
+  }
+}
+
+function renderAll() {
+  computeDisplaySize();
+  reconcileViews();
+  const sel = state.selection;
+  for (const collage of state.collages) {
+    const view = getView(collage.id);
+    const selectedItemId = sel && sel.collageId === collage.id ? sel.itemId : null;
+    view.render(selectedItemId);
+    view.setActive(collage.id === state.activeCollageId);
+  }
+  updateToolbar();
+}
+
+// ---------- Toolbar ----------
 function setCropUI(on) {
   els.cropActions.hidden = !on;
   els.itemControls.hidden = on;
-  // Lock paper config while cropping to avoid geometry surprises.
   els.paperSize.disabled = on;
   els.orientation.disabled = on;
+  els.addCollage.disabled = on;
 }
 
 function updateToolbar() {
@@ -96,33 +162,29 @@ function updateToolbar() {
   }
 }
 
-function status(msg) {
-  statusbar.textContent = msg;
-}
-
-// ---------- Rendering ----------
-subscribe(() => {
-  render();
-  emptyHint.style.display = state.items.length ? 'none' : '';
-  updateToolbar();
-});
+subscribe(renderAll);
 
 // ---------- Image loading ----------
-// placeAt (optional): { cx, cy } in paper-width units to drop images at; when
-// omitted, addItem centers them. Multiple files are staggered slightly.
-function loadFiles(fileList, placeAt) {
+function activeCollageId() {
+  if (state.activeCollageId && getCollage(state.activeCollageId)) return state.activeCollageId;
+  if (state.collages.length) return state.collages[0].id;
+  return addCollage().id;
+}
+
+// placeAt (optional): { cx, cy } in paper-width units for the target collage.
+function loadFiles(fileList, collageId, placeAt) {
   const files = Array.from(fileList).filter((f) => f.type.startsWith('image/'));
   files.forEach((file, i) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
       const aspect = img.naturalWidth / img.naturalHeight;
-      const item = addItem(img, url, aspect);
-      if (placeAt) {
+      const item = addItem(collageId, img, url, aspect);
+      if (item && placeAt) {
         const offset = i * 0.03;
         item.cx = placeAt.cx + offset;
         item.cy = placeAt.cy + offset;
-        render();
+        renderAll();
       }
       status(`Added ${file.name} (${img.naturalWidth}×${img.naturalHeight})`);
     };
@@ -134,46 +196,43 @@ function loadFiles(fileList, placeAt) {
   });
 }
 
-// Where on the paper a drop landed, in paper-width units — or null if the drop
-// was not over the paper (then images are centered).
-function dropPointOnPaper(e) {
-  const r = paperEl.getBoundingClientRect();
-  if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) {
-    return null;
-  }
-  return { cx: (e.clientX - r.left) / r.width, cy: (e.clientY - r.top) / r.width };
+// Which collage a drop landed on, and where (paper-width units) — or null.
+function dropTarget(e) {
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const panel = el && el.closest('[data-collage-id]');
+  if (!panel) return null;
+  const id = Number(panel.dataset.collageId);
+  const view = getView(id);
+  if (!view) return null;
+  const r = view.paperRect();
+  const over = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+  const placeAt = over ? { cx: (e.clientX - r.left) / r.width, cy: (e.clientY - r.top) / r.width } : null;
+  return { id, placeAt };
 }
 
 // ---------- Wiring ----------
 function wire() {
   els.addImages.addEventListener('click', () => els.fileInput.click());
   els.fileInput.addEventListener('change', (e) => {
-    loadFiles(e.target.files);
-    els.fileInput.value = ''; // allow re-selecting the same file
+    loadFiles(e.target.files, activeCollageId());
+    els.fileInput.value = '';
   });
 
-  els.paperSize.addEventListener('change', () => {
-    setConfig({ paperId: els.paperSize.value });
-    resizePaper();
-    render();
-  });
-  els.orientation.addEventListener('change', () => {
-    setConfig({ orientation: els.orientation.value });
-    resizePaper();
-    render();
-  });
-  els.dpi.addEventListener('change', () => {
-    setConfig({ dpi: Number(els.dpi.value) });
+  els.addCollage.addEventListener('click', () => {
+    const c = addCollage();
+    status(`Added ${c.name}.`);
   });
 
-  // Z-order
+  els.paperSize.addEventListener('change', () => setConfig({ paperId: els.paperSize.value }));
+  els.orientation.addEventListener('change', () => setConfig({ orientation: els.orientation.value }));
+  els.dpi.addEventListener('change', () => setConfig({ dpi: Number(els.dpi.value) }));
+
   els.toFront.addEventListener('click', () => runOnSelected(toFront));
   els.forward.addEventListener('click', () => runOnSelected(forward));
   els.backward.addEventListener('click', () => runOnSelected(backward));
   els.toBack.addEventListener('click', () => runOnSelected(toBack));
   els.deleteBtn.addEventListener('click', () => runOnSelected(removeItem));
 
-  // Crop
   els.cropBtn.addEventListener('click', () => {
     if (!getSelected()) return;
     enterCrop();
@@ -195,55 +254,16 @@ function wire() {
     status('Crop cancelled.');
   });
 
-  // Export
-  els.exportBtn.addEventListener('click', () => {
+  els.exportAllBtn.addEventListener('click', () => {
     if (isCropping()) {
       status('Finish or cancel cropping before exporting.');
       return;
     }
-    const { outW, outH, filename } = exportPng();
-    status(`Exporting ${filename} at ${outW}×${outH}px…`);
+    const { count } = exportAll();
+    status(count ? `Exporting ${count} collage${count > 1 ? 's' : ''}…` : 'Nothing to export.');
   });
 
-  // Deselect when clicking empty paper.
-  paperEl.addEventListener('pointerdown', (e) => {
-    if (e.target === paperEl && !isCropping()) select(null);
-  });
-
-  // Keyboard shortcuts
-  window.addEventListener('keydown', (e) => {
-    const t = e.target;
-    if (t instanceof HTMLElement && /INPUT|SELECT|TEXTAREA/.test(t.tagName)) return;
-
-    if (e.key === 'Escape') {
-      if (isCropping()) {
-        cancelCrop();
-        setCropUI(false);
-      } else {
-        select(null);
-      }
-      return;
-    }
-    if (isCropping()) return;
-
-    if ((e.key === 'Delete' || e.key === 'Backspace') && getSelected()) {
-      e.preventDefault();
-      removeItem(getSelected().id);
-    } else if (e.key.startsWith('Arrow') && getSelected()) {
-      e.preventDefault();
-      const step = e.shiftKey ? 0.02 : 0.004; // paper-width units
-      const map = {
-        ArrowLeft: [-step, 0],
-        ArrowRight: [step, 0],
-        ArrowUp: [0, -step],
-        ArrowDown: [0, step],
-      };
-      const [dx, dy] = map[e.key];
-      nudgeSelected(dx, dy);
-    }
-  });
-
-  // Drag & drop image files anywhere on the page (works with existing photos).
+  // OS file drag & drop onto a specific collage (or the active one).
   let dragDepth = 0;
   window.addEventListener('dragenter', (e) => {
     if (![...e.dataTransfer.types].includes('Files')) return;
@@ -269,16 +289,50 @@ function wire() {
       status('Finish or cancel cropping before adding images.');
       return;
     }
-    loadFiles(e.dataTransfer.files, dropPointOnPaper(e));
+    const target = dropTarget(e);
+    if (target) loadFiles(e.dataTransfer.files, target.id, target.placeAt);
+    else loadFiles(e.dataTransfer.files, activeCollageId());
+  });
+
+  // Keyboard shortcuts
+  window.addEventListener('keydown', (e) => {
+    const t = e.target;
+    if (t instanceof HTMLElement && /INPUT|SELECT|TEXTAREA/.test(t.tagName)) return;
+
+    if (e.key === 'Escape') {
+      if (isCropping()) {
+        cancelCrop();
+        setCropUI(false);
+      } else if (state.selection) {
+        select(state.selection.collageId, null);
+      }
+      return;
+    }
+    if (isCropping()) return;
+
+    const sel = getSelected();
+    if ((e.key === 'Delete' || e.key === 'Backspace') && sel) {
+      e.preventDefault();
+      removeItem(sel.collage.id, sel.item.id);
+    } else if (e.key.startsWith('Arrow') && sel) {
+      e.preventDefault();
+      const step = e.shiftKey ? 0.02 : 0.004;
+      const map = {
+        ArrowLeft: [-step, 0],
+        ArrowRight: [step, 0],
+        ArrowUp: [0, -step],
+        ArrowDown: [0, step],
+      };
+      const [dx, dy] = map[e.key];
+      nudgeSelected(dx, dy);
+    }
   });
 
   window.addEventListener('resize', () => {
-    if (isCropping()) return; // don't disturb an active crop
-    resizePaper();
-    render();
+    if (isCropping()) return;
+    renderAll();
   });
 
-  // Reload / close guard while there are unsaved edits.
   window.addEventListener('beforeunload', (e) => {
     if (state.dirty) {
       e.preventDefault();
@@ -289,13 +343,11 @@ function wire() {
 
 function runOnSelected(fn) {
   const sel = getSelected();
-  if (sel) fn(sel.id);
+  if (sel) fn(sel.collage.id, sel.item.id);
 }
 
 // ---------- Init ----------
 populatePaperSizes();
-initItemLayer(paperEl);
-resizePaper();
 wire();
-render();
-status('Ready. Pick a paper size and add images.');
+addCollage(); // start with one collage (fires the first render)
+status('Ready. Add images, or add another collage.');

@@ -3,8 +3,8 @@
 // normalized crop {x,y,w,h}; the original image is never altered, so cropping is
 // fully reversible (see resetCrop / the Uncrop button).
 
-import { state, markDirty, notify, getSelected } from './state.js';
-import { paperRect, getWrapper, updateSelectionOverlay } from './item.js';
+import { markDirty, notify, getSelected } from './state.js';
+import { getView } from './views.js';
 
 const MIN_PX = 16; // minimum crop rectangle size on screen
 
@@ -15,10 +15,13 @@ export function isCropping() {
 }
 
 export function enterCrop() {
-  const item = getSelected();
-  if (!item || ctx) return;
+  const sel = getSelected();
+  if (!sel || ctx) return;
+  const item = sel.item;
+  const view = getView(sel.collage.id);
+  if (!view) return;
 
-  const rect = paperRect();
+  const rect = view.paperRect();
   const pw = rect.width;
   const theta = (item.rotation * Math.PI) / 180;
   const cos = Math.cos(theta);
@@ -39,7 +42,7 @@ export function enterCrop() {
   const centerLocalX = item.cx * pw + rx;
   const centerLocalY = item.cy * pw + ry;
 
-  const wrapper = getWrapper(item.id);
+  const wrapper = view.getWrapper(item.id);
   const img = wrapper.querySelector('img');
   wrapper.classList.add('cropping');
   wrapper.style.width = `${fullW}px`;
@@ -65,6 +68,7 @@ export function enterCrop() {
 
   ctx = {
     item,
+    view,
     wrapper,
     img,
     rectEl,
@@ -85,7 +89,7 @@ export function enterCrop() {
   updateCropDom();
 
   // Hide the selection overlay while cropping (it detects the "cropping" class).
-  updateSelectionOverlay();
+  view.updateSelectionOverlay(item.id);
 }
 
 // Convert a viewport pointer position into full-image-local coordinates.
@@ -229,8 +233,9 @@ export function cancelCrop() {
 // Reset the selected item's crop to the full image (Uncrop button).
 export function resetCrop() {
   if (ctx) cancelCrop();
-  const item = getSelected();
-  if (!item) return;
+  const sel = getSelected();
+  if (!sel) return;
+  const item = sel.item;
   // Keep the image's pixel scale; expand the box back to the full image.
   const imgScale = item.width / item.crop.w;
   item.width = imgScale; // crop.w becomes 1

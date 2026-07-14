@@ -1,10 +1,12 @@
-// Central application state: collage config, image items, selection, dirty flag.
-// Transforms are stored in PAPER-RELATIVE units where 1.0 === paper width.
-// This keeps on-screen editing and high-res export identical up to a scalar.
+// Central application state: global config + a list of collages, each with its
+// own image items. Transforms are stored in PAPER-RELATIVE units where
+// 1.0 === paper width. Paper size is global, so every collage shares an aspect
+// ratio and item coordinates transfer directly when moved between collages.
 
 import { DEFAULT_PAPER_ID, DEFAULT_DPI, aspectRatio } from './papers.js';
 
-let nextId = 1;
+let nextCollageId = 1;
+let nextItemId = 1;
 
 export const state = {
   config: {
@@ -12,14 +14,14 @@ export const state = {
     orientation: 'portrait',
     dpi: DEFAULT_DPI,
   },
-  items: [], // draw order: index 0 = bottom, last = top
-  selectedId: null,
+  collages: [], // [{ id, name, items: [] }]
+  selection: null, // { collageId, itemId } | null
+  activeCollageId: null, // target for "Add images"
   dirty: false,
 };
 
 const listeners = new Set();
 
-// Subscribe to any state change. Returns an unsubscribe function.
 export function subscribe(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -29,7 +31,6 @@ export function notify() {
   for (const fn of listeners) fn();
 }
 
-// Mark the collage as having unsaved edits (drives the beforeunload guard).
 export function markDirty() {
   state.dirty = true;
 }
@@ -39,99 +40,170 @@ export function setConfig(patch) {
   notify();
 }
 
-// Create an item from a loaded image, centered on the paper.
-export function addItem(img, srcUrl, aspect) {
-  // Default width: 45% of paper width, but shrink so the whole image fits.
+// Paper aspect ratio (w/h), used for default placement of new items.
+function paperAspect() {
+  return aspectRatio(state.config.paperId, state.config.orientation);
+}
+
+// ---------- Collages ----------
+export function addCollage(makeActive = true) {
+  const collage = { id: nextCollageId++, name: `Collage ${nextCollageId - 1}`, items: [] };
+  state.collages.push(collage);
+  if (makeActive) state.activeCollageId = collage.id;
+  markDirty();
+  notify();
+  return collage;
+}
+
+export function getCollage(id) {
+  return state.collages.find((c) => c.id === id) || null;
+}
+
+export function removeCollage(id) {
+  const idx = state.collages.findIndex((c) => c.id === id);
+  if (idx === -1) return;
+  const [removed] = state.collages.splice(idx, 1);
+  for (const it of removed.items) {
+    if (it.srcUrl) URL.revokeObjectURL(it.srcUrl);
+  }
+  if (state.selection && state.selection.collageId === id) state.selection = null;
+  if (state.activeCollageId === id) {
+    state.activeCollageId = state.collages.length ? state.collages[0].id : null;
+  }
+  markDirty();
+  notify();
+}
+
+export function setActiveCollage(id) {
+  if (state.activeCollageId === id) return;
+  state.activeCollageId = id;
+  notify();
+}
+
+// ---------- Items ----------
+export function addItem(collageId, img, srcUrl, aspect) {
+  const collage = getCollage(collageId);
+  if (!collage) return null;
+
+  // Default width: 45% of paper width, shrunk so the whole image fits.
   let width = 0.45;
-  const height = width / aspect; // in paper-width units
-  const paperHeightUnits = 1 / aspect_of_paper();
+  const paperHeightUnits = 1 / paperAspect();
+  const height = width / aspect;
   if (height > paperHeightUnits * 0.9) {
     width = paperHeightUnits * 0.9 * aspect;
   }
 
   const item = {
-    id: nextId++,
+    id: nextItemId++,
     img,
     srcUrl,
     naturalW: img.naturalWidth,
     naturalH: img.naturalHeight,
     cx: 0.5,
-    cy: (1 / aspect_of_paper()) / 2, // vertical center in paper-width units
+    cy: paperHeightUnits / 2,
     width,
     rotation: 0,
     crop: { x: 0, y: 0, w: 1, h: 1 },
   };
-  state.items.push(item);
-  state.selectedId = item.id;
+  collage.items.push(item);
+  state.selection = { collageId, itemId: item.id };
+  state.activeCollageId = collageId;
   markDirty();
   notify();
   return item;
 }
 
-// Paper aspect ratio (w/h), used for default placement of new items.
-function aspect_of_paper() {
-  return aspectRatio(state.config.paperId, state.config.orientation);
+export function getItem(collageId, itemId) {
+  const collage = getCollage(collageId);
+  if (!collage) return null;
+  return collage.items.find((it) => it.id === itemId) || null;
 }
 
-export function getItem(id) {
-  return state.items.find((it) => it.id === id) || null;
+export function removeItem(collageId, itemId) {
+  const collage = getCollage(collageId);
+  if (!collage) return;
+  const idx = collage.items.findIndex((it) => it.id === itemId);
+  if (idx === -1) return;
+  const [removed] = collage.items.splice(idx, 1);
+  if (removed.srcUrl) URL.revokeObjectURL(removed.srcUrl);
+  if (state.selection && state.selection.itemId === itemId) state.selection = null;
+  markDirty();
+  notify();
+}
+
+// Move an item to another collage (used for drag-between-collages).
+export function moveItemToCollage(itemId, fromId, toId) {
+  if (fromId === toId) return;
+  const from = getCollage(fromId);
+  const to = getCollage(toId);
+  if (!from || !to) return;
+  const idx = from.items.findIndex((it) => it.id === itemId);
+  if (idx === -1) return;
+  const [item] = from.items.splice(idx, 1);
+  to.items.push(item);
+  state.selection = { collageId: toId, itemId };
+  state.activeCollageId = toId;
+  markDirty();
+}
+
+// ---------- Selection ----------
+export function select(collageId, itemId) {
+  const next = itemId == null ? null : { collageId, itemId };
+  const cur = state.selection;
+  const same = (!cur && !next) || (cur && next && cur.collageId === next.collageId && cur.itemId === next.itemId);
+  if (same) return;
+  state.selection = next;
+  if (collageId != null) state.activeCollageId = collageId;
+  notify();
 }
 
 export function getSelected() {
-  return getItem(state.selectedId);
+  if (!state.selection) return null;
+  const collage = getCollage(state.selection.collageId);
+  if (!collage) return null;
+  const item = collage.items.find((it) => it.id === state.selection.itemId);
+  if (!item) return null;
+  return { collage, item };
 }
 
-export function select(id) {
-  if (state.selectedId === id) return;
-  state.selectedId = id;
-  notify();
-}
-
-export function removeItem(id) {
-  const idx = state.items.findIndex((it) => it.id === id);
-  if (idx === -1) return;
-  const [removed] = state.items.splice(idx, 1);
-  if (removed.srcUrl) URL.revokeObjectURL(removed.srcUrl);
-  if (state.selectedId === id) state.selectedId = null;
+// ---------- Z-order (scoped to a collage) ----------
+function reorder(collageId, itemId, fn) {
+  const collage = getCollage(collageId);
+  if (!collage) return;
+  const items = collage.items;
+  const i = items.findIndex((it) => it.id === itemId);
+  if (i < 0) return;
+  fn(items, i);
   markDirty();
   notify();
 }
 
-// ---- Z-order operations (operate on the selected item) ----
-function indexOf(id) {
-  return state.items.findIndex((it) => it.id === id);
+export function toFront(collageId, itemId) {
+  reorder(collageId, itemId, (items, i) => {
+    if (i === items.length - 1) return;
+    const [it] = items.splice(i, 1);
+    items.push(it);
+  });
 }
 
-export function toFront(id) {
-  const i = indexOf(id);
-  if (i < 0 || i === state.items.length - 1) return;
-  const [it] = state.items.splice(i, 1);
-  state.items.push(it);
-  markDirty();
-  notify();
+export function toBack(collageId, itemId) {
+  reorder(collageId, itemId, (items, i) => {
+    if (i === 0) return;
+    const [it] = items.splice(i, 1);
+    items.unshift(it);
+  });
 }
 
-export function toBack(id) {
-  const i = indexOf(id);
-  if (i <= 0) return;
-  const [it] = state.items.splice(i, 1);
-  state.items.unshift(it);
-  markDirty();
-  notify();
+export function forward(collageId, itemId) {
+  reorder(collageId, itemId, (items, i) => {
+    if (i === items.length - 1) return;
+    [items[i], items[i + 1]] = [items[i + 1], items[i]];
+  });
 }
 
-export function forward(id) {
-  const i = indexOf(id);
-  if (i < 0 || i === state.items.length - 1) return;
-  [state.items[i], state.items[i + 1]] = [state.items[i + 1], state.items[i]];
-  markDirty();
-  notify();
-}
-
-export function backward(id) {
-  const i = indexOf(id);
-  if (i <= 0) return;
-  [state.items[i], state.items[i - 1]] = [state.items[i - 1], state.items[i]];
-  markDirty();
-  notify();
+export function backward(collageId, itemId) {
+  reorder(collageId, itemId, (items, i) => {
+    if (i === 0) return;
+    [items[i], items[i - 1]] = [items[i - 1], items[i]];
+  });
 }

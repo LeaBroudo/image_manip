@@ -77,37 +77,89 @@ body {
 .crop-actions .crop-hint { font-size: 13px; opacity: 0.85; }
 #cropApply { background: var(--accent); border-color: var(--accent); }
 
-/* ---------- Stage & paper ---------- */
+/* ---------- Stage & collages ---------- */
 .stage {
   flex: 1;
   overflow: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   padding: 24px;
 }
+
+.collages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 40px;
+  min-height: 100%;
+}
+
+/* One collage: header + paper. Isolate so each collage's item z-indexes stay
+   contained rather than interleaving with other collages. */
+.collage-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  isolation: isolate;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.panel-spacer { flex: 1; }
+
+.panel-header button {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: #4a505a;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+.panel-header button:hover { background: #565d68; }
+.panel-export { color: var(--text); }
+.panel-delete { line-height: 1; }
+
+.collage-panel.active .panel-title { color: var(--accent); }
 
 .paper {
   position: relative;
   background: #ffffff;
   box-shadow: 0 6px 30px rgba(0, 0, 0, 0.5);
   outline: none;
-  /* width/height set in JS from the selected paper size */
+  /* width/height set from the shared display size */
 }
 
-/* Shades everything outside the paper so image parts that hang past the edge
-   (and won't be exported) appear dimmed. The element itself covers the paper
-   but is transparent; its large spread box-shadow fills the surrounding area. */
-.overflow-mask {
+.collage-panel.active .paper {
+  box-shadow: 0 6px 30px rgba(0, 0, 0, 0.5), 0 0 0 2px var(--accent);
+}
+
+/* Boundary frame drawn ON TOP of images so it's always clear where an image
+   crosses the collage edge (parts outside stay full opacity). */
+.paper-frame {
   position: absolute;
   inset: 0;
+  box-sizing: border-box;
+  border: 2px solid rgba(76, 139, 245, 0.9);
   pointer-events: none;
-  box-shadow: 0 0 0 5000px rgba(28, 31, 36, 0.62);
 }
 
-/* Drop-target cue when dragging image files over the page. */
+/* Drop-target cues. */
 body.dragging .paper {
   outline: 3px dashed var(--accent);
+  outline-offset: 6px;
+}
+.collage-panel.drop-target .paper {
+  outline: 3px solid var(--accent);
   outline-offset: 6px;
 }
 
@@ -243,4 +295,26 @@ body.dragging .paper {
   background: var(--panel);
   border-top: 1px solid var(--panel-border);
   min-height: 24px;
+}
+
+/* ---------- Drag layer (item dragged between collages) ---------- */
+.drag-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 200000;
+}
+.drag-ghost {
+  position: fixed;
+  overflow: hidden;
+  opacity: 0.9;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  outline: 2px solid var(--accent);
+  /* Must not intercept hit-testing (elementFromPoint) during the drag. */
+  pointer-events: none;
+}
+.drag-ghost img {
+  position: absolute;
+  pointer-events: none;
+  max-width: none;
 }

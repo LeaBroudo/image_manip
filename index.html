@@ -33,6 +33,7 @@
     <div class="group">
       <button id="addImages" type="button">Add images…</button>
       <input id="fileInput" type="file" accept="image/*" multiple hidden />
+      <button id="addCollage" type="button">+ Add collage</button>
     </div>
 
     <div class="group" id="itemControls" aria-label="Selected image controls">
@@ -52,17 +53,18 @@
     </div>
 
     <div class="group push-right">
-      <button id="exportBtn" type="button">Export PNG</button>
+      <button id="exportAllBtn" type="button">Export all</button>
     </div>
   </header>
 
   <main class="stage" id="stage">
-    <div class="paper" id="paper" tabindex="0">
-      <p class="empty-hint" id="emptyHint">Add images to start your collage</p>
-    </div>
+    <div class="collages" id="collages"></div>
   </main>
 
   <div class="statusbar" id="statusbar"></div>
+
+  <!-- Floating layer used while dragging an image between collages. -->
+  <div class="drag-layer" id="dragLayer"></div>
 
   <script type="module" src="./js/main.js"></script>
 </body>
